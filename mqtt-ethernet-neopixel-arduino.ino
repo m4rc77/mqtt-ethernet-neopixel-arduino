@@ -1,8 +1,11 @@
 
 // Required libraries:
 #include <SPI.h>
+// https://pubsubclient.knolleary.net/api
 #include <PubSubClient.h>
+// https://www.arduino.cc/en/Reference/Ethernet
 #include <Ethernet.h>
+// https://github.com/FastLED/FastLED/wiki
 #include <FastLED.h>
 
 #include "config.h"
@@ -26,18 +29,16 @@ IPAddress subnet(255, 255, 255, 0);
 
 CRGB leds[NUM_LEDS];
 
-const char *lastWillMessage = "-1"; // the last will message show clients that we are offline
-const int PUBLISH_SENSOR_DATA_DELAY = 10000; //milliseconds
+const char *lastWillMessage = "0"; // the last will message show clients that we are offline
+const int TIMEOUT = 10; // seconds
 
 // Variables ...
-boolean ledSwitchedOn = false;
 int counter = 0;
 
 // Initialize the Ethernet client library
 // with the IP address and port of the server
 // that you want to connect to (port 80 is default for HTTP):
 EthernetClient client;
-
 PubSubClient mqttClient(client);
 
 void setup() {
@@ -61,7 +62,6 @@ void setup() {
   neopixelBar(10);
 }
 
-
 void setupEthernet() {
   delay(10);
   // start the Ethernet connection:
@@ -77,7 +77,7 @@ void setupEthernet() {
       Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
       neopixelAlert();
       while (true) {
-        delay(1); // do nothing, no point running without Ethernet hardware
+        delay(100); // do nothing, no point running without Ethernet hardware
       }
     }
     if (Ethernet.linkStatus() == LinkOFF) {
@@ -89,9 +89,7 @@ void setupEthernet() {
     Serial.println(Ethernet.localIP());
   }
 
-
-
-    // Check for Ethernet hardware present
+  // Check for Ethernet hardware present
   if (Ethernet.hardwareStatus() == EthernetNoHardware) {
     Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
     neopixelAlert();
@@ -103,13 +101,14 @@ void setupEthernet() {
     Serial.println("Ethernet cable is not connected.");
     neopixelAlert();
   }
-  
  
 }
 
 void setupMqtt() {
   mqttClient.setServer(mqttServer, 1883);
   mqttClient.setCallback(mqttCallback);
+  mqttClient.setKeepAlive(TIMEOUT);
+  mqttClient.setSocketTimeout(TIMEOUT);
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -120,16 +119,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   Serial.println();
 
-  if (topicStr == mqttTopicLedSet) {
-    Serial.println("Got LED switching command ...");
-    // Switch on the LED if an 1 was received as first character
-    if ((char)payload[0] == '1') {
-      ledOn();
-    } else {
-      ledOff();
-    }
-    mqttPublishLedState();
-  } else if (topicStr == mqttTopicNeopixelSet) {
+  if (topicStr == mqttTopicNeopixelSet) {
     Serial.println("Got neopixel switching command ...");
     String inString = "";
     int x = -1;
@@ -170,6 +160,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     Serial.println("Got neopixel clear command ...");
     FastLED.clear();
     FastLED.show();
+  } else {
+    Serial.print("Got unexpected data from topic ");Serial.println(topicStr);
   }
 }
 
@@ -197,12 +189,12 @@ void checkMqtt() {
     while (!mqttClient.connected()) {
       Serial.print("Attempting to open MQTT connection...");
       // connect with last will (QoS=1, retain=true, ) ...
-      if (mqttClient.connect("ESP8266_Client", mqttTopicLedStatus, 1, true, lastWillMessage)) {
+      if (mqttClient.connect("ESP8266_Client", mqttTopicStatus, 1, true, lastWillMessage)) {
         Serial.println("connected");
         mqttClient.subscribe(mqttTopicLedSet);
         mqttClient.subscribe(mqttTopicNeopixelSet);
         mqttClient.subscribe(mqttTopicNeopixelClear);
-        mqttPublishLedState();
+        publishString(mqttTopicStatus, "1", true);
         flashLed();
       } else {
         Serial.print("MQTT connection failed, retry count: ");
@@ -214,15 +206,11 @@ void checkMqtt() {
   }  
 }
 
-void mqttPublishLedState() {
-  Serial.print("Publishing to server: ");Serial.println(mqttServer);
-  
-  String ledStateStr = ledSwitchedOn ? "1" : "0"; 
-  Serial.print("Publishing ");Serial.print(ledStateStr);Serial.print(" to topic ");Serial.println(mqttTopicLedStatus);
-  char charBufLed[ledStateStr.length() + 1];
-  ledStateStr.toCharArray(charBufLed, ledStateStr.length() + 1);
-  // retain message ...
-  mqttClient.publish(mqttTopicLedStatus, charBufLed, true); 
+void publishString(const char* topic, String valueStr, boolean retain) {
+  Serial.print("Publishing ");Serial.print(valueStr);Serial.print(" to topic ");Serial.print(topic);Serial.print(" (");Serial.print(mqttServer);Serial.println(")");
+  char charBufValue[valueStr.length() + 1];
+  valueStr.toCharArray(charBufValue, valueStr.length() + 1); //packaging up the data to publish to mqtt ...
+  mqttClient.publish(topic, charBufValue, retain);
 }
 
 void neoPixelLoop() {
@@ -284,12 +272,10 @@ void neopixelAlert() {
 // =================================================================================================================================
 
 void ledOn() {
-  ledSwitchedOn = true;
   digitalWrite(LED_PIN, HIGH);
 }
 
 void ledOff() {
-  ledSwitchedOn = false;
   digitalWrite(LED_PIN, LOW);
 }
 
